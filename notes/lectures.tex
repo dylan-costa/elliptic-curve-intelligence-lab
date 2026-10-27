@@ -9,6 +9,8 @@
 
 \graphicspath{{figures/}}
 \input{figures/step01_numbers.tex}
+\input{figures/step02_numbers.tex}
+\input{figures/step03_numbers.tex}
 
 \theoremstyle{definition}
 \newtheorem{definition}{Definition}[section]
@@ -430,6 +432,231 @@ really a test on a different family. I compare like with like, prime conductors 
 \end{interview}
 
 %=============================================================================
+\section{What the model is allowed to see}
+\label{sec:features}
+%=============================================================================
+
+A feature is allowed if it is a cheap, checkable property of the curve that does not encode
+the rank. Step~2 computes two groups for every curve (\file{src/eclab/features.py}), keeps an
+explicit list of everything excluded, and checks the $a_p$ against several independent facts.
+
+\paragraph{Invariants (\NInvariantFeatures{} features).}
+From the conductor: $\log N$, the number of bad primes, whether $N$ is prime or squarefree, and
+the exponents of $2$ and $3$. From the minimal discriminant: $\log|\Delta|$, its sign (whether
+$E(\R)$ has one or two components) and the Szpiro ratio $\log|\Delta|/\log N$. Also
+$\log(1+|j|)$, the torsion order, $\#E(\Q)[2]$, and the number of primes of split
+multiplicative, non-split multiplicative and additive reduction. Those last three deserve
+a warning: together with the additive local signs they determine the root number. So they
+let a model learn parity on Task~1, as Section~0 predicted. On Task~2 parity is constant,
+so they cannot help there in that way.
+
+\paragraph{Frobenius traces (\NApFeatures{} features).}
+$a_p=p+1-\#E(\F_p)$ for every prime $p<100$, including bad primes, where the same count gives
+$a_p=1$, $-1$ or $0$ for split, non-split and additive reduction. For odd $p$, completing the
+square turns $y^2+(a_1x+a_3)y=x^3+\dots$ into $Y^2=g(x)$ with $g(x)=4x^3+b_2x^2+2b_4x+b_6$. Each
+$x$ then contributes $1+\chi(g(x))$ points, where $\chi$ is the Legendre symbol, so
+\[
+  a_p\;=\;-\sum_{x\in\F_p}\chi\bigl(g(x)\bigr).
+\]
+This turns point counting into one table lookup per $(x,\text{curve})$, done for a block of
+$200{,}000$ curves at a time:
+
+\codefrom{src/eclab/features.py}
+\begin{lstlisting}
+g = (4 * x3 + b2[sl, None] * x2 + (2 * b4[sl, None] % p) * x + b6[sl, None]) % p
+out[sl] = -chi[g].sum(axis=1, dtype=np.int64)
+\end{lstlisting}
+
+\noindent The $b_i$ are first reduced mod $p$ from exact Python integers, since $a_4,a_6$ can
+exceed 64 bits. All \NCurves{} curves take under four minutes. For bad primes $p\ge100$, the
+reduction type uses the criterion $a_p=\bigl(\tfrac{-c_6}{p}\bigr)$ for multiplicative $p$.
+
+\paragraph{Checking numbers we cannot look up.}
+PARI does not build on this Windows machine, so instead of comparing against another program
+we check facts the $a_p$ must satisfy:
+\begin{itemize}[nosep]
+  \item a brute-force count over all $(x,y)\in\F_p^2$ agrees on the test sample, and so do the
+        $q$-expansions of the forms of level 11 and 37;
+  \item the Hasse bound holds everywhere: the largest $|a_p|/2\sqrt p$ is \HasseMax;
+  \item isogenous curves have equal $a_p$ (Exercise~\ref{ex:isogeny-ap}): across the
+        \NMultiCurveClasses{} classes with more than one curve there are \ApClassViolations{}
+        violations;
+  \item parity: for semistable curves, Exercise~\ref{ex:semistable} gives
+        $w=(-1)^{\omega(N)+1}(-1)^{\#\text{non-split}}$, and $w$ must equal $(-1)^r$. This holds
+        for all \ParityAgree{} semistable curves (\ParityDisagree{} failures). It tests the
+        reduction types, the split criterion at large primes and the dataset's ranks at once.
+\end{itemize}
+
+\paragraph{The audit.}
+\NExcluded{} quantities are never features, each with its reason recorded in code
+(\code{EXCLUDED}), and \code{feature\_columns} asserts that no excluded name slips into a feature
+set:
+
+\begin{center}\small
+\begin{tabular}{@{}ll@{}}
+\toprule
+excluded & why\\\midrule
+rank & the label\\
+analytic $\Sha$ & from the BSD formula, which needs $r$; $>1$ for \ShaBigRankZero{} of rank 0, \ShaBigRankTwo{} of rank 2\\
+root number & $=(-1)^r$; used only as a sanity check in Section~4\\
+regulator, $L^{(r)}(E,1)$ & need the rank; $L(E,1)\neq0\iff r_{\mathrm{an}}=0$\\
+label, class, index & identifiers; LMFDB orders class letters by the $a_p$, so letters are a coded feature\\\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{The signal, before any training.}
+Figure~\ref{fig:meanap} shows the average of $a_p/\sqrt p$ by rank. Rank-2 curves have
+strongly negative $a_p$, so more points mod $p$, exactly as Birch and Swinnerton-Dyer saw
+(Exercise~\ref{ex:bsd-sum}). Rank 0 sits slightly above zero and rank 1 almost exactly on it,
+which is what the heuristic $-\sum a_p/p\approx(r-\tfrac12)\log\log X$ predicts.
+A fixed formula with no parameters, the Mestre--Nagao-style sum
+\[
+  S(E)=\sum_{p<100,\ p\nmid N}\frac{-a_p\log p}{p},
+\]
+averages $\MeanSRankZero$, $\MeanSRankOne$ and $\MeanSRankTwo$ for ranks 0, 1 and 2. Used as a
+score on the complete range, it reaches an ROC-AUC of \SumAucTaskTwo{} on Task~2 and only
+\SumAucTaskOne{} on Task~1. That reframes both tasks. Task~2 is not hopeless: a formula
+from 1965 already ranks rank-2 curves above rank-0 curves most of the time, so it is the
+baseline every learned model must beat. Task~1 is hard for the $a_p$ because rank 0 and
+rank 1 look alike in Figure~\ref{fig:meanap}; what separates them is parity, which lives in
+the bad primes.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=\linewidth]{step02_mean_ap_by_rank.pdf}
+\caption{Mean of $a_p/\sqrt p$ over curves with good reduction at $p$ and $N\le500{,}000$, by rank.}
+\label{fig:meanap}
+\end{figure}
+
+\paragraph{What these features cannot do.}
+The $L$-function's behaviour at $s=1$ depends on roughly $\sqrt N$ of its coefficients, and we
+give the model the $a_p$ for $p<100$ only. At $N\approx10^5$ that is a useful sample; at
+$N\approx2\times10^8$ it is a much smaller one. So we expect the signal in $S$ to weaken as $N$
+grows, and Section~3 builds the splits that measure it.
+
+\paragraph{Exercises.}
+\begin{exercise}\label{ex:count}
+Let $p$ be odd. Show that $y^2+(a_1x+a_3)y=x^3+a_2x^2+a_4x+a_6$ has as many solutions in
+$\F_p^2$ as $Y^2=4x^3+b_2x^2+2b_4x+b_6$, and deduce $a_p=-\sum_x\chi(g(x))$. Where does the
+argument fail for $p=2$, and how does the code handle $p=2$?
+\end{exercise}
+\begin{exercise}\label{ex:bsd-sum}
+Birch and Swinnerton-Dyer observed $\prod_{p\le X,\,p\nmid N}\#E(\F_p)/p\approx C(\log X)^r$. Take
+logarithms, use $\log(1+u)\approx u-u^2/2$, and assume $a_p^2$ averages to $p$ (Sato--Tate)
+to show this predicts $\sum_{p\le X}-a_p/p\approx(r-\tfrac12)\log\log X+O(1)$. Explain
+Figure~\ref{fig:meanap} with it: why is rank 0 above zero and rank 1 so close to it?
+\end{exercise}
+\begin{exercise}\label{ex:parity-test}
+Suppose the split criterion had the wrong sign, so that it reported split as non-split for
+every bad prime $p\ge100$. Which curves would fail the parity check, and roughly how many
+would you expect? Why is a check that mixes several computations stronger than one that
+tests each alone?
+\end{exercise}
+
+\begin{interview}
+\emph{``Couldn't you just have used a library for the $a_p$?''} ``The library didn't build on
+my machine, so I wrote a vectorized point count and validated it against facts it must
+satisfy: brute force, known modular forms, the Hasse bound, equality across 672 thousand
+isogeny classes, and the parity of the rank for 1.5 million semistable curves. Then, before
+training anything, I checked a formula from the 1960s. It already gets an AUC of 0.965 on my
+headline task, so that is the baseline my models have to beat.''
+\end{interview}
+
+%=============================================================================
+\section{Evaluation when examples aren't independent}
+\label{sec:splits}
+%=============================================================================
+
+A test score means something only if the test curves are new to the model in the way that
+matters. Two things break that here: isogenous curves are near-copies, and the dataset is two
+families with different base rates. Step~3 builds splits that handle both
+(\file{src/eclab/splits.py}).
+
+\paragraph{How much a curve-level split leaks.}
+Take the Task~2 curves of conductor at most $500{,}000$ and use the $a_p$ for $p<100$ as an exact
+key. Consider a ``model'' that predicts a test curve's rank by finding a training curve with
+the same key. Under a random 80/20 split \emph{of curves}, \CurveSplitMatch{} of test curves
+have such a match, and copying its label is right \CurveSplitLookupAcc{} of the time. Under an
+80/20 split \emph{of isogeny classes}, \ClassSplitMatch{} have a match. Among these curves,
+no two different classes share the whole key (\SharedApKeys{} collisions), so the $a_p$
+vector is a fingerprint of the isogeny class. A flexible model can memorize fingerprints, and
+a curve-level split would reward it for that.
+
+\paragraph{Folds by hashing the class.}
+Each class goes to one of five folds by a keyed hash of its name. The assignment does not
+depend on row order, survives adding new curves, and is identical on every machine:
+
+\codefrom{src/eclab/splits.py}
+\begin{lstlisting}
+def class_fold(iso_class: pd.Series, k: int = N_FOLDS) -> np.ndarray:
+    h = pd.util.hash_array(iso_class.to_numpy(dtype=object), hash_key=HASH_KEY, categorize=True)
+    return (h % np.uint64(k)).astype(np.int8)
+\end{lstlisting}
+
+\paragraph{Four splits, four questions.}
+Every split keeps classes whole; conductor-based splits do so automatically, since a class
+shares one conductor. Counts are Task~2 curves; $\pi$ is the share of rank~2.
+\begin{center}\small
+\begin{tabular}{@{}llrrrr@{}}
+\toprule
+split & curves (train $\to$ test) & train & test & $\pi$ train & $\pi$ test\\\midrule
+random & $N\le500$k, folds 1--4 $\to$ fold 0 & \SplitRandomTrain & \SplitRandomTest & \SplitRandomPiTrain & \SplitRandomPiTest\\
+conductor & $N\le400$k $\to$ $(400\text{k},500\text{k}]$ & \SplitConductorTrain & \SplitConductorTest & \SplitConductorPiTrain & \SplitConductorPiTest\\
+prime & prime $N\le10^8\to N>2\cdot10^8$ & \SplitPrimeTrain & \SplitPrimeTest & \SplitPrimePiTrain & \SplitPrimePiTest\\
+family & $N\le500$k $\to$ prime $N>500$k & \SplitFamilyTrain & \SplitFamilyTest & \SplitFamilyPiTrain & \SplitFamilyPiTest\\\bottomrule
+\end{tabular}
+\end{center}
+The \emph{prime} split is the clean test of size: train and test share a family and a base
+rate, and the gap between $10^8$ and $2\cdot10^8$ keeps neighbouring conductors apart. The
+\emph{family} split changes everything at once, including the base rate (from about 23\% to
+39\%). If a model does worse there but not on the prime split, the cause is the family, not
+the size.
+
+\paragraph{Which metric survives which shift.}
+When only the base rate changes (label shift), ROC-AUC is unchanged: it depends only on how
+the scores of rank-2 curves compare with those of rank-0 curves, and the distribution of
+scores within each class does not move (Exercise~\ref{ex:auc-shift}). Accuracy, log-loss and
+calibration all move, even for a perfect model of the training distribution. So
+Sections~4--7 report ROC-AUC as the headline across splits, PR-AUC alongside it, and log-loss
+and calibration on the random split, using the correction of Exercise~\ref{ex:label-shift}
+when comparing across splits.
+
+\paragraph{Cross-validation inside training.}
+Model selection in Sections~4--6 uses the same folds within the training set, so tuning never
+sees the test set and never separates isogenous curves either.
+
+\paragraph{What the splits cannot do.}
+They decide which curves a model is tested on, not whether its score beats chance by more
+than noise. Every comparison from Section~4 on comes with a bootstrap interval over isogeny
+classes, which are the independent units, not curves.
+
+\paragraph{Exercises.}
+\begin{exercise}\label{ex:auc-shift}
+Show that ROC-AUC equals $\P(s(X_1)>s(X_0))$, where $X_1$ and $X_0$ are independent draws of a
+rank-2 and a rank-0 curve. Deduce that it is unchanged under label shift, and give an example
+of a covariate shift that changes it.
+\end{exercise}
+\begin{exercise}\label{ex:twins}
+Use the class-size counts from Section~1 to compute the prediction of
+Exercise~\ref{ex:isogeny-ap} for the share of test curves with a twin in training. Compare it
+with the measured \CurveSplitMatch. Why should they agree only roughly?
+\end{exercise}
+\begin{exercise}\label{ex:hash}
+Give two concrete ways a split made with \code{rng.permutation(len(df))} and a fixed seed can
+silently change between two runs of the same code. Why does hashing the class name avoid
+both?
+\end{exercise}
+
+\begin{interview}
+\emph{``How did you avoid leakage in your splits?''} ``Isogenous curves share every $a_p$
+and the rank. With a curve-level split, 44\% of test curves had an exact twin in training,
+and copying its label was 100\% accurate. So I hash the isogeny class into folds. For
+distribution shift I separate two questions: a prime-to-prime split tests larger conductors
+within one family and base rate, and a cross-family split tests everything at once. AUC is my
+headline metric across splits because label shift does not move it.''
+\end{interview}
+
+%=============================================================================
 \appendix
 \section*{Solutions to exercises}
 \addcontentsline{toc}{section}{Solutions to exercises}
@@ -476,5 +703,52 @@ prior odds. Under label shift the likelihood ratio is unchanged, so the new odds
 odds divided by $\pi/(1-\pi)$ and multiplied by $\pi'/(1-\pi')$. With the numbers from this
 section, the factor is about $(0.391/0.609)/(0.229/0.771)\approx2.2$: the model should more than
 double its odds of rank~2 on the large prime-conductor curves.
+
+\paragraph{Exercise \ref{ex:count}.}
+For odd $p$ the substitution $Y=2y+a_1x+a_3$ is a bijection of $\F_p$ for each fixed $x$, and
+$Y^2=4(x^3+a_2x^2+a_4x+a_6)+(a_1x+a_3)^2=g(x)$. For each $x$, $Y^2=g(x)$ has $1+\chi(g(x))$
+solutions, so there are $p+\sum_x\chi(g(x))$ affine points. Adding the point at infinity,
+$a_p=p+1-\#E(\F_p)=-\sum_x\chi(g(x))$. For $p=2$ one cannot divide by $2$, so the code counts the
+four pairs $(x,y)\in\F_2^2$ directly.
+
+\paragraph{Exercise \ref{ex:bsd-sum}.}
+With $u=(1-a_p)/p$, $\#E(\F_p)/p=1+u$ and $\log(1+u)\approx u-u^2/2$. The first-order term gives
+$\sum1/p-\sum a_p/p$. In the second, $u^2\approx a_p^2/p^2$, which averages to $1/p$, so it
+contributes $-\tfrac12\sum1/p$. By Mertens, $\sum_{p\le X}1/p=\log\log X+O(1)$, so
+\[
+  \log\prod\approx\tfrac12\log\log X-\sum a_p/p .
+\]
+Setting this equal to $r\log\log X+O(1)$ gives $-\sum a_p/p\approx(r-\tfrac12)\log\log X$. So
+rank $0$ has a positive bias in the $a_p$, rank $1$ a small negative one, and rank $2$ a large
+negative one: the order in Figure~\ref{fig:meanap}, where ranks 0 and 1 sit on either side of
+zero, close together. (Goldfeld made this precise in 1982, conditionally on hypotheses
+about $L(E,s)$.)
+
+\paragraph{Exercise \ref{ex:parity-test}.}
+Every semistable curve with an odd number of bad primes $p\ge100$ would get the wrong $w$, so
+the check would fail on a large fraction of curves of prime conductor above $100$, roughly
+everything in the prime family. One check that combines the reduction types, the split
+criterion and the ranks can only pass if all three are right (or their errors cancel
+exactly), so passing it on 1.5 million curves is strong evidence for all three.
+
+\paragraph{Exercise \ref{ex:auc-shift}.}
+The ROC curve integrates the true-positive rate against the false-positive rate. Its area is
+$\P(s(X_1)>s(X_0))$, by writing both rates as tail probabilities and integrating. This
+probability depends only on the score distributions given each class. Label shift changes the
+class proportions, not these distributions, so AUC is unchanged. A covariate shift that
+changes it: on larger conductors the $a_p$ for $p<100$ carry less information, so the
+rank-2 and rank-0 score distributions overlap more, and AUC falls.
+
+\paragraph{Exercise \ref{ex:twins}.}
+The prediction is $\sum_kf_k(1-0.2^{k-1})$, from the class sizes of the Task~2 curves. It
+should agree only roughly with the measured \CurveSplitMatch: the measurement uses Task~2
+curves only, and an exact $a_p$ key can match a curve in another class in principle (here it
+never does).
+
+\paragraph{Exercise \ref{ex:hash}.}
+Adding or removing a single row shifts the permutation of every later row; and reading the
+file in a different order (a different source, or a pandas sort) changes which curve gets
+which random number. The hash depends only on the class name and a fixed key, so neither
+matters.
 
 \end{document}
