@@ -8,6 +8,7 @@
 \usepackage[colorlinks=true,linkcolor=blue!50!black,citecolor=blue!50!black,urlcolor=blue!50!black]{hyperref}
 
 \graphicspath{{figures/}}
+\input{figures/step01_numbers.tex}
 
 \theoremstyle{definition}
 \newtheorem{definition}{Definition}[section]
@@ -263,6 +264,172 @@ algebraic rank provably agree; that is why the tasks stop at rank $2$ and leave 
 \end{interview}
 
 %=============================================================================
+\section{Data: what a row means, and where it came from}
+\label{sec:data}
+%=============================================================================
+
+Every claim we make later is a claim about this table, so before fitting anything we check
+that it says what we think it says. Step~1 parses \NCurves{} curves into a typed table
+(\file{data/curves.parquet}), runs \NChecks{} consistency checks, and asks where the curves came from.
+That last question turns out to matter most: the dataset is two datasets glued together.
+
+\paragraph{A row.}
+Each line of the source file is
+\code{label|[a1,a2,a3,a4,a6]|rank|[torsion]|conductor|sha}. The label
+\code{389.a1} reads as conductor $389$, isogeny class \code{a}, first curve in the class. The
+coefficients are those of the \emph{reduced global minimal model}: minimal at every prime,
+with $a_1,a_3\in\{0,1\}$ and $a_2\in\{-1,0,1\}$. Every curve over $\Q$ has exactly one such
+model, so the coefficients identify the curve. The other two coefficients can be enormous:
+\NBigCoeffs{} curves have an $|a_4|$ or $|a_6|$ of at least $2^{63}$, too large for a 64-bit
+integer. So the table stores $a_4,a_6$ as decimal strings and converts them to exact Python
+integers when needed. Storing them as floats would round them and silently change the curve.
+
+\paragraph{Checks that can actually fail.}
+A validation step is only useful if it catches real errors, so every check comes with a test
+that corrupts one row and confirms the check notices (\file{tests/test\_data.py}). The
+strongest check uses the fact that for a minimal model, the primes of bad reduction are
+exactly the primes dividing the discriminant~$\Delta$. So $\Delta$ with the conductor's primes
+divided out must be $\pm1$:
+
+\codefrom{src/eclab/data/validate.py}
+\begin{lstlisting}
+    delta = discriminant(a1, a2, a3, a4, a6)
+    if delta == 0:
+        return "singular"
+    for p in conductor_factors:
+        if delta % p:
+            return "bad_prime_not_in_discriminant"
+        while delta % p == 0:
+            delta //= p
+    if abs(delta) != 1:
+        return "discriminant_has_good_prime"
+\end{lstlisting}
+
+\noindent This one check catches a mistyped coefficient, a non-minimal model, and a
+conductor that belongs to a different curve. The other checks are that labels are unique and
+agree with the conductor, the model is reduced, the torsion group is one of Mazur's 15, the
+analytic $\Sha$ is a positive square (it must be, if $\Sha$ is finite, by the Cassels--Tate
+pairing), the exponent of each $p$ in $N$ is at most $8$, $5$ or $2$ for $p=2$, $3$ or $\ge5$, and
+the rank is constant on each isogeny class. All \NChecks{} checks pass on all \NCurves{} curves
+(\NFailures{} failures), which takes about a minute.
+
+\begin{remark}[a test that was wrong, not the code]
+The first test run asserted $\Delta=-11^{10}$ for \code{11.a1}, from memory of the curve
+$X_0(11)$. The code said $-11$. The code was right: the LMFDB numbers curves in a class by its
+own rule, so \code{11.a1} is Cremona's \code{11a2}, while $X_0(11)$ is \code{11.a2}. When a
+test and the code disagree, check the test's source of truth too.
+\end{remark}
+
+\paragraph{Isogeny classes, and why they matter for splitting.}
+The \NCurves{} curves fall into \NClasses{} isogeny classes. Most classes (\NSingletonClasses)
+have a single curve; the largest has \MaxClassSize. Isogenous curves are different curves, but
+for our purposes they are copies of each other. They have the same rank
+(Exercise~\ref{ex:isogeny-rank}), the same conductor, and the same number of points mod every
+good prime, so the same $a_p$ (Exercise~\ref{ex:isogeny-ap}). If \code{37.b1} lands in training
+and \code{37.b2} in testing, the model is tested on a curve whose $a_p$ and label it has already
+seen. Section~3 therefore splits by isogeny class, never by curve.
+
+\paragraph{Two datasets glued together.}
+The conductors run up to \MaxConductor, but not evenly:
+\begin{itemize}[nosep]
+  \item \NComplete{} curves have $N\le500{,}000$. This is Cremona's table, which lists
+        \emph{every} curve over $\Q$ of conductor below $500{,}000$.
+  \item \NHigh{} curves have $N>500{,}000$. Every one of them has either a prime conductor
+        (\NHighPrime) or a 7-smooth conductor, meaning no prime factor above $7$
+        (\NHighSmooth). There is not a single curve above $500{,}000$ with any other conductor.
+\end{itemize}
+These come from separate searches for curves of prime conductor and of 7-smooth conductor.
+Our file does not record how complete those searches are, or how their ranks were obtained;
+that is a question for the LMFDB's source notes before we lean on those ranks.
+
+My first guess, written into the project plan before looking, was that the large-conductor
+curves were a sample with small discriminants. The data said otherwise, and it changes the
+story of the out-of-distribution test completely. Figure~\ref{fig:regimes} compares the rank
+mix of four groups. Above $500{,}000$, rank~2 makes up far more of the prime-conductor curves
+than of the complete range. But the right comparison is with prime-conductor curves
+\emph{below} $500{,}000$ (only \NSmallPrime{} of them), and those look just like the
+large ones. The shift is not ``larger conductor''; it is ``prime conductor''.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=\linewidth]{step01_regimes.pdf}
+\caption{Rank mix by group, with the number of curves in each. Prime-conductor curves
+have the same mix below and above $500{,}000$; the complete range below $500{,}000$ is
+different because most of its conductors are composite.}
+\label{fig:regimes}
+\end{figure}
+
+\paragraph{The rank mix drifts with the conductor.}
+Even inside the complete range the mix is not stable (Figure~\ref{fig:drift}). Between the
+first and last bins of $25{,}000$ conductors, the share of rank~2 rises from
+\RankTwoFirstBin{} to \RankTwoLastBin{}, and rank~0 falls from \RankZeroFirstBin{} to
+\RankZeroLastBin. Conjecturally, half of all curves have rank 0 and half rank 1, so this
+excess of rank~2 is expected to fade at much larger conductors, too slowly to see here.
+Bektemirov, Mazur, Stein and Watkins discuss this tension between tables and conjecture
+(\emph{Average ranks of elliptic curves}, Bull.\ AMS, 2007). Two consequences for us:
+the conductor alone carries information about the label, and any test on larger conductors
+faces a different class balance, a \emph{label shift}, even before the features change.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=\linewidth]{step01_rank_by_conductor.pdf}
+\caption{Share of each rank among curves of conductor $N\le500{,}000$, in bins of
+$25{,}000$.}
+\label{fig:drift}
+\end{figure}
+
+\paragraph{What this means for Task~2.}
+Task~2 keeps the \NTaskTwo{} curves of rank 0 or 2. Overall \PiTaskTwo{} of them have rank~2,
+but that rate is \PiTaskTwoComplete{} in the complete range, \PiTaskTwoSmallPrime{} for
+prime conductors below $500{,}000$, and \PiTaskTwoHighPrime{} for prime conductors above it.
+A model trained on the complete range and tested on the large prime-conductor curves would
+face both a different kind of conductor and a different base rate. So Section~3 will run two
+tests: a clean one, prime conductors below $500{,}000$ against prime conductors above it, and
+the harder one across the boundary.
+
+\paragraph{A first look at leakage.}
+The last column is the analytic order of $\Sha$. It exceeds $1$ for \ShaBigRankZero{} of
+rank-0 curves but only \ShaBigRankTwo{} of rank-2 curves. The column is computed from the
+BSD formula, which needs the rank and the leading coefficient. And empirically, as in
+Delaunay's heuristics for $\Sha$, nontrivial $\Sha$ is much rarer on curves of higher rank. A model given this column would learn ``$\Sha>1$ means rank 0''
+and look clever. It stays out of every feature set, as Section~0 promised.
+
+\paragraph{What this step cannot tell us.}
+The checks confirm that each row describes a real, minimal curve with the stated conductor.
+They cannot confirm the ranks: those come from descents and $L$-function computations that we
+are trusting, not redoing. Section~2 begins computing things we \emph{can} check ourselves:
+the $a_p$, by counting points.
+
+\paragraph{Exercises.}
+\begin{exercise}\label{ex:isogeny-rank}
+Let $\varphi:E\to E'$ be an isogeny over $\Q$. Show that $\rk E(\Q)=\rk E'(\Q)$. (Use the dual
+isogeny $\hat\varphi$ with $\hat\varphi\circ\varphi=[\deg\varphi]$, and that $\ker\varphi$ is finite.)
+\end{exercise}
+\begin{exercise}\label{ex:isogeny-ap}
+Show that isogenous curves have $\#E(\F_p)=\#E'(\F_p)$ for every good prime $p$, so their
+$a_p$ agree. Then suppose we split curves (not classes) at random, 80\% to training. Using the
+class sizes, estimate what fraction of test curves have an isogenous twin in training. Why is
+that fraction an underestimate of the damage when the model is very flexible?
+\end{exercise}
+\begin{exercise}\label{ex:label-shift}
+A model is calibrated on a population where rank~2 has base rate $\pi$, and then used on one
+with base rate $\pi'$. Assume pure \emph{label shift}: the distribution of features given the
+rank is the same in both. Show that the correct probability on the new population is
+obtained by multiplying the predicted odds by $\frac{\pi'/(1-\pi')}{\pi/(1-\pi)}$. Evaluate the
+factor for the complete range versus large prime conductors in Task~2.
+\end{exercise}
+
+\begin{interview}
+\emph{``How did you validate the data?''} ``Ten checks, each with a test that corrupts a row
+to prove it can fail. The strongest uses the fact that for a minimal model the bad primes are
+exactly the primes of the discriminant, which catches typos, non-minimal models and wrong
+conductors in one go. Then I asked where the data came from: everything above conductor
+500{,}000 has prime or 7-smooth conductor, so the `generalize to larger conductors' test is
+really a test on a different family. I compare like with like, prime conductors below
+500{,}000 against prime conductors above it.''
+\end{interview}
+
+%=============================================================================
 \appendix
 \section*{Solutions to exercises}
 \addcontentsline{toc}{section}{Solutions to exercises}
@@ -287,5 +454,27 @@ $-\pi\log q-(1-\pi)\log(1-q)$, minimized at $q=\pi$ with value $H(\pi)$. When $\
 predicting ``rank $0$'' always scores $1-\pi$, close to $1$, while finding no rank-$2$ curve at
 all. Log-loss rewards confidence that is justified, and PR-AUC measures how well the model
 ranks the rare class, so both expose that predictor.
+
+\paragraph{Exercise \ref{ex:isogeny-rank}.}
+$\varphi$ restricts to a homomorphism $E(\Q)\to E'(\Q)$ with finite kernel, so
+$\rk E(\Q)\le\rk E'(\Q)$. The dual isogeny $\hat\varphi:E'\to E$ is also defined over $\Q$ with
+finite kernel, giving the reverse inequality.
+
+\paragraph{Exercise \ref{ex:isogeny-ap}.}
+For good $p$, $\varphi$ reduces to an isogeny $\tilde E\to\tilde E'$ over $\F_p$ that commutes
+with Frobenius $\pi$. Then $\#\tilde E(\F_p)=\deg(1-\pi)$ on both sides, since $1-\pi$ has the
+same characteristic polynomial on the Tate modules, which the isogeny identifies after
+tensoring with $\Q_\ell$. With random curve-level splitting, a test curve in a class of size
+$k$ has an untouched twin unless all $k-1$ others also went to test, so the fraction is
+$\sum_k f_k\,(1-0.2^{k-1})$, where $f_k$ is the share of curves in classes of size $k$. It
+underestimates the damage because a flexible model memorizes the exact $a_p$ vector, so one
+twin is enough to recall the label.
+
+\paragraph{Exercise \ref{ex:label-shift}.}
+By Bayes, the posterior odds are the likelihood ratio $p(x\mid r=2)/p(x\mid r=0)$ times the
+prior odds. Under label shift the likelihood ratio is unchanged, so the new odds are the old
+odds divided by $\pi/(1-\pi)$ and multiplied by $\pi'/(1-\pi')$. With the numbers from this
+section, the factor is about $(0.391/0.609)/(0.229/0.771)\approx2.2$: the model should more than
+double its odds of rank~2 on the large prime-conductor curves.
 
 \end{document}

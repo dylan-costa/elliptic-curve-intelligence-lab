@@ -18,3 +18,4 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["data: needs the full curve table (data/curves.parquet); skipped when it is absent"]
