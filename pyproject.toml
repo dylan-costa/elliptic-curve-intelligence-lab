@@ -1,0 +1,20 @@
+[project]
+name = "eclab"
+version = "0.1.0"
+description = "Predicting the rank of elliptic curves over Q from arithmetic data, and benchmarking elliptic-curve and post-quantum signatures"
+authors = [{ name = "Dylan Costa", email = "dylancosta46@gmail.com" }]
+requires-python = ">=3.11"
+dependencies = ["numpy", "pandas", "pyarrow", "scikit-learn", "matplotlib"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

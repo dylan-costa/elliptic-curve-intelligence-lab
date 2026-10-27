@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+# raw and processed curve data are rebuilt from ecdata_v2.txt, never committed
+data/
+# LaTeX build products (the PDF itself is committed)
+notes/*.aux
+notes/*.log
+notes/*.out
+notes/*.toc
+notes/*.fls
+notes/*.fdb_latexmk
+notes/*.synctex.gz
+# local tool config
+.claude/
