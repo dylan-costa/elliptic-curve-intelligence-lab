@@ -12,6 +12,7 @@
 \input{figures/step02_numbers.tex}
 \input{figures/step03_numbers.tex}
 \input{figures/step04_numbers.tex}
+\input{figures/step05_numbers.tex}
 
 \theoremstyle{definition}
 \newtheorem{definition}{Definition}[section]
@@ -774,7 +775,7 @@ to calibration.
 
 \paragraph{What logistic regression cannot do.}
 It adds up evidence feature by feature. Parity is an interaction, and so is ``this $a_p$ is
-small \emph{because} $p\mid N$''. Section~5 uses trees, which split on one
+small \emph{because} $p\mid N$''. Section~\ref{sec:boosting} uses trees, which split on one
 feature and then another.
 
 \begin{figure}[ht]
@@ -811,6 +812,143 @@ I report that difference with a paired bootstrap over isogeny classes. The more 
 number is the drop to about 0.82 on large conductors, which hits the formula equally, so it is
 about information, not overfitting. And on the easy task, the model mostly learned parity,
 which I confirmed by adding the root number and getting 0.998.''
+\end{interview}
+
+%=============================================================================
+\section{Gradient boosting, and what each feature group adds}
+\label{sec:boosting}
+%=============================================================================
+
+Logistic regression adds evidence one feature at a time. Step~5 replaces it with trees, which
+can combine features, and asks two ablation questions on every split: what do the invariants
+add to the $a_p$, and what do trees add to a linear model?
+
+\paragraph{Boosted trees.}
+A regression tree splits the feature space by thresholds ($a_7\le-2$? then $\log N\le11.4$?) and
+predicts a constant in each leaf. Boosting builds a score $F=\sum_m\nu h_m$ one tree at a time:
+tree $h_m$ is fit to the negative gradient of the log-loss at the current score, which for
+curve $i$ is $y_i-\sigma(F_i)$, the part of the label not yet explained
+(Exercise~\ref{ex:newton}). The step size $\nu=0.1$ keeps each tree's contribution small.
+scikit-learn's histogram version bins each feature into at most 255 values first, so a tree
+on $1.2$ million curves takes a fraction of a second.
+
+\paragraph{Stopping on whole classes.}
+Boosting stops when the log-loss on held-out data stops improving. scikit-learn's built-in
+version holds out \emph{random rows}, which would put isogenous twins on both sides, exactly
+the leak of Section~\ref{sec:splits}. So the held-out rows are fold~1 of the class hash:
+
+\codefrom{src/eclab/models.py}
+\begin{lstlisting}
+def fit(self, train, y, val):           # val = splits.validation_mask(train): whole classes
+    X = train[self.columns].to_numpy(np.float32)
+    self.model.fit(X[~val], y[~val], X_val=X[val], y_val=y[val])
+\end{lstlisting}
+
+\noindent The only tuned setting is the number of leaves per tree, chosen by validation
+log-loss on Task~2: \TuneLossSmall, \TuneLossMid{} and \TuneLossBig{} for 15, 63 and 255 leaves.
+We use \Leaves{} everywhere. It stopped at the cap of \LeavesTrees{} trees while still improving
+slowly, so the boosting numbers are, if anything, slightly pessimistic.
+
+\paragraph{Task 2.}
+ROC-AUC by split; the last two rows are paired differences with half the width of their 95\%
+interval.
+\begin{center}\small
+\begin{tabular}{@{}lllll@{}}
+\toprule
+model & random & conductor & prime & family\\\midrule
+\inputrows{figures/step05_table.tex}
+\bottomrule
+\end{tabular}
+\end{center}
+``Invariants add'' is boosting on both groups minus boosting on the $a_p$; ``trees add'' is
+boosting minus logistic regression, both on both groups.
+
+\begin{enumerate}[nosep,leftmargin=*]
+  \item \emph{The complete range is close to solved.} Boosting reaches \GbBothRandom{} on the
+        random split, with log-loss \GbBothLogLoss{} and PR-AUC \GbBothPrAuc. A clearer way to
+        say it: $1-\text{AUC}$ is the share of (rank 2, rank 0) pairs put in the wrong order.
+        It falls from \MisorderSum{} for $S$ to \MisorderGb, about \MisorderRatio{} times fewer.
+  \item \emph{The invariants help through $\log N$.} In the permutation importances
+        (Figure~\ref{fig:importance}) the small-$p$ $a_p$ dominate, as the logistic weights
+        did, and the only invariant in the top twelve is $\log N$ (rank \LogNRank). The
+        reason is that the meaning of $S$ changes with $N$. Within the complete range, the median
+        $S$ of rank-2 curves falls from \OctMedTwoLow{} for $N\le\OctHiFirst$ to \OctMedTwoHigh{} for
+        $N>\OctLoLast$, and rank 0 moves from $\OctMedZeroLow$ to $\OctMedZeroHigh$, so the AUC
+        of $S$ falls from \OctAucLow{} to \OctAucHigh. The same $S$ is strong evidence for rank
+        2 at large $N$ and weak evidence at small $N$. A tree learns this as a threshold that
+        depends on $N$; a sum of separate terms cannot.
+  \item \emph{That help does not extrapolate.} On the prime split, where every test conductor
+        is larger than every training conductor, the invariants add only \InvAddsPrime. A tree
+        is constant beyond its largest threshold, so for $N>10^8$ it uses the rule learned
+        at $N\approx10^8$.
+  \item \emph{Large conductors stay hard.} Boosting gets \GbBothPrime{} and \GbBothFamily{}
+        on the prime and family splits: better than $S$, still far from the complete range.
+        Every model has the same ceiling there, which again points to information, not
+        modelling.
+\end{enumerate}
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=\linewidth]{step05_ablation.pdf}
+\caption{Task 2: ROC-AUC minus that of $S$, with paired 95\% class-bootstrap intervals
+(narrower than the dots).}
+\label{fig:ablation}
+\end{figure}
+
+\paragraph{Task 1: trees learn parity.}
+Boosting on the invariants \emph{alone} scores \TaskOneGbInv{} on Task~1, more than logistic
+regression on everything (\TaskOneLrBoth). On semistable test curves, where parity is a function
+of the reduction counts, it scores \SemiGbInv{} against \SemiLrBoth: an XOR takes a few splits of a
+small tree (Exercise~\ref{ex:tree-parity}). With the $a_p$ added, boosting reaches \TaskOneGbBoth. This
+is the parity trap from Section~0 coming true: on Task~1 a stronger model looks better largely by
+rediscovering the root number, which is why Task~2 is the headline.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=\linewidth]{step05_importance.pdf}
+\caption{Permutation importance (Task 2, random split, 200{,}000 test curves): the drop in
+ROC-AUC when one feature's values are shuffled.}
+\label{fig:importance}
+\end{figure}
+
+\paragraph{Reading importances carefully.}
+Shuffling one feature measures what the model loses without it, \emph{given the others}.
+Correlated features share credit (Exercise~\ref{ex:perm}), so a small importance does not mean
+a feature carries no information, only that the model can do without it.
+
+\paragraph{What boosting cannot do.}
+Trees do not extrapolate, which matters on exactly the splits where we most want to
+generalize. They also treat $a_5$ and $a_7$ as unrelated columns, with no notion that both are
+traces of Frobenius on the same object, scaled by $\sqrt p$. Section~6 tries a
+network, which uses smooth functions of all the $a_p$ at once, and checks whether any of these
+probabilities can be trusted.
+
+\paragraph{Exercises.}
+\begin{exercise}\label{ex:tree-parity}
+Using Exercise~\ref{ex:xor}, draw a tree of depth 3 on $(n_{\text{bad}},n_{\text{non-split}})$
+that gives the parity of the rank exactly for semistable curves with one or two bad primes. How
+many leaves does a tree need for up to $k$ bad primes, and why does boosting with 63 leaves
+per tree have no trouble?
+\end{exercise}
+\begin{exercise}\label{ex:newton}
+For the log-loss $\ell(y,F)=-y\log\sigma(F)-(1-y)\log(1-\sigma(F))$, show that
+$\partial\ell/\partial F=\sigma(F)-y$ and $\partial^2\ell/\partial F^2=\sigma(F)(1-\sigma(F))$.
+Deduce the Newton value for a leaf containing curves $i\in I$:
+$\sum_I(y_i-q_i)/\sum_Iq_i(1-q_i)$.
+\end{exercise}
+\begin{exercise}\label{ex:perm}
+Suppose we added an exact copy of the column $a_7$. What would happen to the permutation
+importance of each copy, and why? What does this say about reading Figure~\ref{fig:importance}
+as a ranking of which primes ``matter'' for the rank?
+\end{exercise}
+
+\begin{interview}
+\emph{``What did gradient boosting buy you?''} ``On the complete range, 15 times fewer misordered
+pairs than the classical formula, AUC 0.998. The ablation shows where it comes from: the
+formula's meaning drifts with the conductor, and trees learn a conductor-dependent threshold.
+That same mechanism can't extrapolate, so on larger conductors boosting gains little. On the
+parity task it learned the root number from reduction types, which is exactly why I don't
+headline that task.''
 \end{interview}
 
 %=============================================================================
@@ -931,5 +1069,28 @@ The weighted AUC is $\sum_{i\in+}\sum_{j\in-}w_iw_j\bigl([s_i>s_j]+\tfrac12[s_i=
 which counts each pair of copies once in the repeated data set. If every class has $k$
 identical curves, the data hold only $n/k$ independent units, so the true standard error is
 about $\sqrt k$ times what a bootstrap over the $n$ curves reports.
+
+\paragraph{Exercise \ref{ex:tree-parity}.}
+Split first on $n_{\text{bad}}\le1$. If yes ($N$ prime), split on $n_{\text{non-split}}\le0$:
+even rank if yes, odd if no. If no ($\omega=2$), split on $n_{\text{non-split}}\le0$ (odd), then
+on $n_{\text{non-split}}\le1$ (even if yes, odd if no). One leaf per cell $(\omega,n_{\text{non-split}})$
+with $0\le n_{\text{non-split}}\le\omega$ always suffices, which is $\sum_{\omega=1}^k(\omega+1)=k(k+3)/2$
+leaves. In the complete range $\omega\le6$ (since $2\cdot3\cdot5\cdot7\cdot11\cdot13\cdot17>500{,}000$),
+so 27 leaves are enough, and boosting adds up many trees, none of which has to be exact.
+
+\paragraph{Exercise \ref{ex:newton}.}
+With $\sigma'=\sigma(1-\sigma)$,
+$\partial\ell/\partial F=-y(1-\sigma)+(1-y)\sigma=\sigma-y$, and differentiating again gives
+$\sigma(1-\sigma)$. Adding a constant $c$ to every $F_i$ in the leaf changes the loss by about
+$\sum_I(q_i-y_i)c+\tfrac12\sum_Iq_i(1-q_i)c^2$, which is smallest at
+$c=\sum_I(y_i-q_i)/\sum_Iq_i(1-q_i)$.
+
+\paragraph{Exercise \ref{ex:perm}.}
+Shuffling one copy leaves the other intact, and the model can route its splits through either,
+so each copy can show a small importance even though $a_7$ itself matters; together they may
+show much less than one column did alone. Importance measures how much \emph{this model}
+depends on a column, given the others. It is not a ranking of how much information each $a_p$
+carries about the rank; for that, compare models refit without a feature, as the ablation does
+for whole groups.
 
 \end{document}

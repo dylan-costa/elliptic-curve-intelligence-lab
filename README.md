@@ -30,7 +30,7 @@ of the notes audits every feature.
 | 2 | Features (invariants, a_p) and leakage audit | done |
 | 3 | Isogeny-grouped and conductor-holdout splits | done |
 | 4 | Baselines: majority, logistic regression | done |
-| 5 | Gradient boosting and feature ablation | planned |
+| 5 | Gradient boosting and feature ablation | done |
 | 6 | Small neural network, calibration | planned |
 | 7 | Out-of-distribution test, murmurations | planned |
 | 8 | Ed25519 / ECDSA P-256 benchmark | planned |
@@ -133,7 +133,7 @@ src/eclab/      the package
   splits.py       isogeny-class folds and the four train/test splits
   dataset.py      the table every model reads, and task_split(frame, task, split)
   evaluate.py     metrics, calibration, bootstrap over isogeny classes
-  models.py       majority and logistic regression
+  models.py       majority, logistic regression, gradient boosting
   data/           parsing (ecdata.py), validation (validate.py), build entry point (build.py)
 scripts/        figs_stepNN.py: every number and figure in the notes
 results/        stepNN_*.csv: the metrics behind every table
