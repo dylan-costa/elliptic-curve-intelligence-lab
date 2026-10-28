@@ -19,12 +19,18 @@ import pandas as pd
 COMPLETE_UP_TO = 500_000
 HASH_KEY = "eclab-splits-v01"  # 16 bytes, as pandas requires; changing it reshuffles every split
 N_FOLDS = 5
+VALIDATION_FOLD = 1  # held out of training for early stopping and tuning; never fold 0, the random test fold
 
 
 def class_fold(iso_class: pd.Series, k: int = N_FOLDS) -> np.ndarray:
     """A fold in 0..k-1 for each row, the same for every curve in an isogeny class."""
     h = pd.util.hash_array(iso_class.to_numpy(dtype=object), hash_key=HASH_KEY, categorize=True)
     return (h % np.uint64(k)).astype(np.int8)
+
+
+def validation_mask(df: pd.DataFrame) -> np.ndarray:
+    """Rows of a training frame held out for early stopping: whole classes, by the same hash."""
+    return class_fold(df.iso_class) == VALIDATION_FOLD
 
 
 def split(df: pd.DataFrame, name: str) -> tuple[np.ndarray, np.ndarray]:

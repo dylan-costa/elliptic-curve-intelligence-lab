@@ -46,6 +46,8 @@ INVARIANTS = {
     "n_additive": "primes of additive reduction",
 }
 AP_FEATURES = {c: f"a_p for p = {c[3:]}" for c in AP_COLUMNS}
+# computed from the columns above when the table is loaded, not stored
+DERIVED = {"mn_sum": "S = sum over good p < 100 of -a_p log p / p (Mestre-Nagao style; Section 2)"}
 
 # never features: name -> why
 EXCLUDED = {
@@ -58,7 +60,7 @@ EXCLUDED = {
     "iso_class": "identifier (same reason as label)",
     "iso_index": "identifier",
 }
-GROUPS = {"invariants": list(INVARIANTS), "ap": AP_COLUMNS}
+GROUPS = {"invariants": list(INVARIANTS), "ap": AP_COLUMNS, "sum": list(DERIVED)}
 
 
 def feature_columns(*groups: str) -> list[str]:
@@ -66,6 +68,13 @@ def feature_columns(*groups: str) -> list[str]:
     cols = [c for g in groups for c in GROUPS[g]]
     assert not set(cols) & set(EXCLUDED)
     return cols
+
+
+def mestre_nagao_sum(ap: np.ndarray, conductor: np.ndarray) -> np.ndarray:
+    """S = sum over primes p < AP_BOUND not dividing N of -a_p log p / p; ap has one column per prime."""
+    good = np.stack([conductor % p != 0 for p in PRIMES], axis=1)
+    w = np.log(PRIMES) / np.array(PRIMES)
+    return (np.where(good, -ap.astype(np.float64), 0.0) * w).sum(axis=1)
 
 
 def ap_brute_force(ainvs, p: int) -> int:

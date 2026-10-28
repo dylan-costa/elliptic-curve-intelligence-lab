@@ -29,7 +29,7 @@ of the notes audits every feature.
 | 1 | Load and validate 3.8M curves | done |
 | 2 | Features (invariants, a_p) and leakage audit | done |
 | 3 | Isogeny-grouped and conductor-holdout splits | done |
-| 4 | Baselines: majority, logistic regression | planned |
+| 4 | Baselines: majority, logistic regression | done |
 | 5 | Gradient boosting and feature ablation | planned |
 | 6 | Small neural network, calibration | planned |
 | 7 | Out-of-distribution test, murmurations | planned |
@@ -131,8 +131,12 @@ src/eclab/      the package
   curves.py       exact discriminants and factoring (Python integers)
   features.py     invariants, a_p by point counting, and the leakage audit
   splits.py       isogeny-class folds and the four train/test splits
+  dataset.py      the table every model reads, and task_split(frame, task, split)
+  evaluate.py     metrics, calibration, bootstrap over isogeny classes
+  models.py       majority and logistic regression
   data/           parsing (ecdata.py), validation (validate.py), build entry point (build.py)
 scripts/        figs_stepNN.py: every number and figure in the notes
+results/        stepNN_*.csv: the metrics behind every table
 tests/          pytest suite, run in CI on Python 3.11 and 3.12;
                 tests marked `data` need data/curves.parquet and skip without it
 notes/          lecture notes (LaTeX source and PDF)

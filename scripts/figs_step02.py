@@ -15,7 +15,7 @@ import numpy as np
 from sklearn.metrics import roc_auc_score
 
 from eclab.data.ecdata import load_curves
-from eclab.features import AP_COLUMNS, EXCLUDED, INVARIANTS, PRIMES, load_features
+from eclab.features import AP_COLUMNS, EXCLUDED, INVARIANTS, PRIMES, load_features, mestre_nagao_sum
 from eclab.tasks import task1_label, task2_label, task2_mask
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -68,7 +68,7 @@ def main():
     plt.close(fig)
 
     # a Mestre-Nagao style sum, with no fitting: S = sum over good p < 100 of -a_p log(p) / p
-    s = np.nansum(np.where(good, -ap * np.log(PRIMES) / np.array(PRIMES), np.nan), axis=1)
+    s = mestre_nagao_sum(ap, curves.conductor.to_numpy())
     t2 = complete & task2_mask(rank)
     auc1 = roc_auc_score(task1_label(rank[complete]), s[complete])
     auc2 = roc_auc_score(task2_label(rank[t2]), s[t2])
