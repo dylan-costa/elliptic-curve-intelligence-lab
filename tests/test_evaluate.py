@@ -3,7 +3,8 @@ import pandas as pd
 import pytest
 from sklearn.metrics import roc_auc_score
 
-from eclab.evaluate import WeightedAuc, auc_replicates, bootstrap_weights, ece, interval, report, shift_prior
+from eclab.evaluate import (WeightedAuc, auc_replicates, bootstrap_weights, ece, estimate_prior, interval, report,
+                            shift_prior)
 from eclab.features import PRIMES, mestre_nagao_sum
 
 
@@ -67,3 +68,15 @@ def test_mestre_nagao_sum_skips_bad_primes():
     assert s[0] == pytest.approx(full)
     assert s[1] == pytest.approx(full - 2 * np.log(11) / 11)
 
+
+def test_estimate_prior_recovers_a_shifted_base_rate():
+    rng = np.random.default_rng(2)
+    # scores from two fixed class-conditional distributions; calibrated for a training prior of 0.2
+    def sample(n, pi):
+        y = rng.random(n) < pi
+        x = rng.normal(np.where(y, 1.0, -1.0), 1.0)
+        return x, y
+    lik = lambda x: np.exp(2 * x)  # p(x | 1) / p(x | 0) for unit normals at +1 and -1
+    to_p = lambda x, pi: 1 / (1 + (1 - pi) / (pi * lik(x)))
+    x, y = sample(200_000, 0.4)
+    assert estimate_prior(to_p(x, 0.2), 0.2) == pytest.approx(y.mean(), abs=0.01)

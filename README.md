@@ -31,7 +31,7 @@ of the notes audits every feature.
 | 3 | Isogeny-grouped and conductor-holdout splits | done |
 | 4 | Baselines: majority, logistic regression | done |
 | 5 | Gradient boosting and feature ablation | done |
-| 6 | Small neural network, calibration | planned |
+| 6 | Small neural network, calibration | done |
 | 7 | Out-of-distribution test, murmurations | planned |
 | 8 | Ed25519 / ECDSA P-256 benchmark | planned |
 | 9 | ML-DSA benchmark | planned |
@@ -114,6 +114,42 @@ copying its label is 100% accurate. With a class-level split the figure is 0%.
 | prime | prime N ≤ 10⁸ → prime N > 2·10⁸ | 39.4% / 38.9% |
 | family | N ≤ 500k → prime N > 500k | 22.9% / 39.1% |
 
+## Results (Task 2: rank 0 vs rank 2)
+
+ROC-AUC on held-out isogeny classes. Every number comes from `results/step0{4,5,6}_metrics.csv`;
+95% intervals from a bootstrap over isogeny classes are narrower than ±0.004.
+
+| Model | random | conductor | prime | family |
+|---|---|---|---|---|
+| S (formula, no training) | 0.965 | 0.956 | 0.792 | 0.815 |
+| Logistic regression, invariants + a_p | 0.991 | 0.980 | 0.818 | 0.819 |
+| Gradient boosting, invariants + a_p | 0.998 | 0.992 | 0.825 | **0.838** |
+| Neural network, invariants + a_p | **0.998** | **0.994** | **0.830** | 0.671 |
+
+- **Within the complete range the task is close to solved.** Boosting puts 15 times fewer
+  (rank 2, rank 0) pairs in the wrong order than S. Logistic regression's weights on a_p
+  correlate 0.998 with the log p / p in S.
+- **Larger conductors cost 0.15 to 0.17 of AUC for every model**, including S, which has no
+  parameters. So the loss is information (a_p for p < 100 say less when N ≈ 10^8), not
+  overfitting.
+- **The network ties boosting in-distribution** (+0.0007) **and collapses out of it.** A ReLU
+  network extrapolates linearly in log N, while a tree stays flat. On a_p alone, whose range does
+  not move with N, the network is fine on the family split (0.828).
+- **Calibration:** every model is calibrated in-distribution (ECE ≤ 0.017). On the family split,
+  EM re-estimates the new base rate well (38.2% vs a true 39.1%) but does not fix calibration:
+  the model is overconfident, which is covariate shift, not label shift.
+- **Task 1 (rank > 0) is mostly parity.** The root number alone gives AUC 0.908. Boosting on
+  the invariants learns it from reduction types (0.945 on semistable curves, vs 0.763 for
+  logistic regression), which is why Task 2 is the headline.
+
+To reproduce (Steps 5 and 6 read the previous step's saved predictions):
+
+```bash
+python scripts/figs_step04.py   # about 5 minutes
+python scripts/figs_step05.py   # about 40 minutes; --reuse rebuilds outputs from results/
+python scripts/figs_step06.py   # about 15 minutes; --reuse as above
+```
+
 ## Notes
 
 `notes/lectures.tex` is written alongside the code, with one section per step. To rebuild
@@ -132,8 +168,8 @@ src/eclab/      the package
   features.py     invariants, a_p by point counting, and the leakage audit
   splits.py       isogeny-class folds and the four train/test splits
   dataset.py      the table every model reads, and task_split(frame, task, split)
-  evaluate.py     metrics, calibration, bootstrap over isogeny classes
-  models.py       majority, logistic regression, gradient boosting
+  evaluate.py     metrics, calibration, label-shift correction, bootstrap over isogeny classes
+  models.py       majority, logistic regression, gradient boosting, neural network
   data/           parsing (ecdata.py), validation (validate.py), build entry point (build.py)
 scripts/        figs_stepNN.py: every number and figure in the notes
 results/        stepNN_*.csv: the metrics behind every table

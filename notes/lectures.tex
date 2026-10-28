@@ -13,6 +13,7 @@
 \input{figures/step03_numbers.tex}
 \input{figures/step04_numbers.tex}
 \input{figures/step05_numbers.tex}
+\input{figures/step06_numbers.tex}
 
 \theoremstyle{definition}
 \newtheorem{definition}{Definition}[section]
@@ -770,7 +771,7 @@ compute an XOR (Exercise~\ref{ex:xor}). Two cells show this from both sides:
 On the family split the Task~2 logistic model has log-loss \FamilyBothLogLoss, against
 \BothLogLoss{} on the random split, while its AUC looks fine. Training conductors stop at
 $\log N=\TrainMaxLogN$ and test conductors reach \FamilyMaxLogN; a logit is linear in the
-features, so it extrapolates into confident, wrong probabilities. Section~6 returns
+features, so it extrapolates into confident, wrong probabilities. Section~\ref{sec:mlp} returns
 to calibration.
 
 \paragraph{What logistic regression cannot do.}
@@ -919,7 +920,7 @@ a feature carries no information, only that the model can do without it.
 \paragraph{What boosting cannot do.}
 Trees do not extrapolate, which matters on exactly the splits where we most want to
 generalize. They also treat $a_5$ and $a_7$ as unrelated columns, with no notion that both are
-traces of Frobenius on the same object, scaled by $\sqrt p$. Section~6 tries a
+traces of Frobenius on the same object, scaled by $\sqrt p$. Section~\ref{sec:mlp} tries a
 network, which uses smooth functions of all the $a_p$ at once, and checks whether any of these
 probabilities can be trusted.
 
@@ -949,6 +950,145 @@ formula's meaning drifts with the conductor, and trees learn a conductor-depende
 That same mechanism can't extrapolate, so on larger conductors boosting gains little. On the
 parity task it learned the root number from reduction types, which is exactly why I don't
 headline that task.''
+\end{interview}
+
+%=============================================================================
+\section{A small neural network, and whether to trust the probabilities}
+\label{sec:mlp}
+%=============================================================================
+
+Step~6 asks two questions. Does a neural network, which uses smooth functions of all features
+at once, beat the trees? And are any of these models' probabilities right, in the sense that
+among curves given $0.3$, about $30\%$ have rank 2?
+
+\paragraph{The network.}
+Two hidden layers of 128 and 64 ReLU units, $h\mapsto\max(0,Wh+b)$, then a sigmoid; inputs
+standardized; the log-loss plus a small $L^2$ penalty, minimized by Adam on minibatches of 1024
+curves. On both feature groups it has $13{,}569$ weights. As with boosting, scikit-learn's own early stopping would
+hold out random rows, so we train one epoch at a time and keep the epoch with the best log-loss
+on the validation classes:
+
+\codefrom{src/eclab/models.py}
+\begin{lstlisting}
+for _ in range(self.max_epochs):
+    self.net.partial_fit(Xt, yt, classes=[0, 1])    # one pass over shuffled minibatches
+    loss = log_loss(yv, self.net.predict_proba(Xv)[:, 1])
+    if loss < best - 1e-5:
+        best, best_net, wait = loss, copy.deepcopy(self.net), 0
+    else:
+        wait += 1
+        if wait >= self.patience:
+            break
+\end{lstlisting}
+
+\noindent On the random split the best epoch was \MlpBestEpoch{} of \MlpEpochsRun; an epoch takes
+about 7 seconds on a laptop CPU.
+
+\paragraph{Network against trees.}
+Paired differences in Task~2 ROC-AUC, network minus boosting on the same features, with half
+the width of the 95\% class-bootstrap interval:
+\begin{center}\small
+\begin{tabular}{@{}lllll@{}}
+\toprule
+features & random & conductor & prime & family\\\midrule
+\inputrows{figures/step06_table.tex}
+\bottomrule
+\end{tabular}
+\end{center}
+Inside the training range it is a tie in every practical sense. The network reaches
+\MlpBothRandom{} on the random split, ahead of boosting by \MlpDiffRandom: an interval that
+excludes zero, on a difference no one would notice. On the $a_p$ alone it is slightly
+\emph{behind}. This is the lesson of the calc project again. A more flexible model is not
+automatically a better one, and the honest report is ``tie'', with the interval to show it.
+
+\paragraph{Then it falls apart.}
+On the family split the network on invariants and $a_p$ scores \MlpBothFamily, against
+\GbBothFamily{} for boosting, while the network on the $a_p$ alone is fine (\MlpApFamily). The
+culprit is extrapolation. A ReLU network is piecewise linear, so beyond the training data it
+continues along its last linear piece (Exercise~\ref{ex:relu}); a tree stays constant. The
+test conductors run from $\log N\approx13$, the edge of training, to $19.5$. Split the family
+test set into fifths by $\log N$. From the lowest fifth ($\log N\le\QuintFirstHi$) to the highest
+($\log N>\QuintLastLo$), boosting slides from \QuintGbFirst{} to \QuintGbLast, and the network
+falls from \QuintMlpFirst{} to \QuintMlpLast. The $a_p$ have the same bounded range at every
+conductor (Hasse), so a network that sees only them has nothing to extrapolate. The prime split
+does not show this, because there the training data already reach $N=10^8$. The remedy is not
+a better network. It is to give a model only features whose range does not move between
+training and use, or to say clearly which inputs it may not be trusted on.
+
+\paragraph{Calibration.}
+A model is \emph{calibrated} if $\P(y=1\mid q(x)=t)=t$ for every $t$. The \emph{reliability
+diagram} bins the predictions and plots the observed share of rank 2 in each bin against the
+mean prediction; the \emph{expected calibration error} (ECE) is the average gap, weighted by
+bin size. On the random split:
+\begin{center}\small
+\begin{tabular}{@{}lccc@{}}
+\toprule
+model & ROC-AUC & log-loss & ECE\\\midrule
+\inputrows{figures/step06_calib_table.tex}
+\bottomrule
+\end{tabular}
+\end{center}
+All four are well calibrated where they were trained (Figure~\ref{fig:calibration}, left).
+Log-loss rewards calibration and ranking together, and there the network and boosting tie
+again. The network under-predicts slightly in the middle, which temperature scaling could fix
+without changing its AUC (Exercise~\ref{ex:temperature}).
+
+\paragraph{Calibration under shift.}
+On the family split the base rate jumps from \ShiftPiTrain{} to \ShiftPiTest. Section~1's
+correction (Exercise~\ref{ex:label-shift}) needs the new base rate, which we would not know in
+practice. It can be estimated from unlabelled test curves by EM (Saerens et~al.,
+2002): shift the predictions to a guessed rate, average them, repeat
+(Exercise~\ref{ex:em}). Boosting's raw predictions average \ShiftPiMeanPred; EM estimates
+\ShiftPiEm, close to the truth. But the calibration does not improve: ECE goes from
+\ShiftEceRaw{} to \ShiftEceEm, the same as with the true rate (\ShiftEceOracle). The right
+panel of Figure~\ref{fig:calibration} shows why. The curve is \emph{flat}, not shifted: curves
+given $0.1$ are about $37\%$ rank 2 and curves given $0.9$ about $56\%$. The model is
+overconfident because the $a_p$ carry less information at large $N$, and that is covariate
+shift, not label shift. Correcting the base rate fixes the average, not the slope. Fixing the
+slope needs some labelled curves from the new family.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=\linewidth]{step06_calibration.pdf}
+\caption{Reliability diagrams for Task 2 (bins with at least 200 curves). Left: random split.
+Right: boosting on the family split, before and after re-estimating the base rate by EM.}
+\label{fig:calibration}
+\end{figure}
+
+\paragraph{What these models cannot do.}
+On the complete range three model families agree to the third decimal, so the remaining
+errors are probably not a modelling problem. Off it, every model hits the same ceiling near
+$0.83$, and the models that tried to use $\log N$ to get past it were hurt by it. Section~7
+looks at what the $a_p$ themselves do as $N$ grows, through the murmurations of
+He, Lee, Oliver and Pozdnyakov.
+
+\paragraph{Exercises.}
+\begin{exercise}\label{ex:relu}
+Show that a network built from affine maps and $\max(0,\cdot)$ is continuous and piecewise
+linear, and that along any ray $x_0+t\,v$ its pre-sigmoid output is linear in $t$ for $t$ large
+enough. Why does this make the network's predictions go to $0$ or $1$ as $\log N$ grows, while a
+tree's stay fixed?
+\end{exercise}
+\begin{exercise}\label{ex:em}
+Under label shift, suppose $q(x)$ is calibrated for training base rate $\pi$, and let $q_{\pi'}$
+be $q$ shifted to $\pi'$ as in Exercise~\ref{ex:label-shift}. Show that the true test rate
+$\pi^*$ satisfies $\pi^*=\E_{\text{test}}[q_{\pi^*}(x)]$, so it is a fixed point of the EM
+iteration. Why does this argument fail on the family split?
+\end{exercise}
+\begin{exercise}\label{ex:temperature}
+\emph{Temperature scaling} replaces a logit $z$ by $z/T$. Show that this does not change the
+ROC-AUC. If the log-loss on held-out curves is $L(T)$, show that $L$ is convex in $1/T$, and say
+which way $T$ should move for a model that is overconfident.
+\end{exercise}
+
+\begin{interview}
+\emph{``Did deep learning help?''} ``I tried a small network with the same isogeny-safe early
+stopping. Inside the training range it tied gradient boosting: 0.998 both, a difference of
+0.0007. Outside it, the network fell to 0.67 while trees kept 0.84, because a ReLU network
+extrapolates linearly in the conductor and a tree stays flat. I also checked calibration: all
+models are calibrated in-distribution. Under the shift, re-estimating the base rate by EM got
+the rate right, 38\% against 39\%, but didn't fix calibration, because the real problem was
+overconfidence, not the base rate.''
 \end{interview}
 
 %=============================================================================
@@ -1092,5 +1232,27 @@ show much less than one column did alone. Importance measures how much \emph{thi
 depends on a column, given the others. It is not a ranking of how much information each $a_p$
 carries about the rank; for that, compare models refit without a feature, as the ablation does
 for whole groups.
+
+\paragraph{Exercise \ref{ex:relu}.}
+Affine maps and $\max(0,\cdot)$ are continuous and piecewise linear, and so are their
+compositions, with finitely many pieces. Along a ray each unit changes slope at most at
+finitely many $t$, so beyond the last such $t$ the output is $z(t)=at+b$. If $a\neq0$, $z\to\pm\infty$
+and $\sigma(z)\to0$ or $1$: the further $\log N$ goes past the training range, the more confident
+the network becomes. A tree has finitely many thresholds; beyond the largest one in the
+direction $v$ every tree returns the same leaf, so the prediction is constant.
+
+\paragraph{Exercise \ref{ex:em}.}
+Under label shift, $q_{\pi^*}(x)=\P_{\text{test}}(y=1\mid x)$ by Exercise~\ref{ex:label-shift}, so
+$\E_{\text{test}}[q_{\pi^*}(x)]=\P_{\text{test}}(y=1)=\pi^*$. On the family split $p(x\mid y)$ also
+changes (the $a_p$ separate the ranks less well at large $N$), so $q_{\pi^*}$ is not the test
+posterior. EM still finds a rate close to $\pi^*$ here, but the shifted probabilities are not
+calibrated.
+
+\paragraph{Exercise \ref{ex:temperature}.}
+$z\mapsto z/T$ is increasing for $T>0$, so the order of the scores, and hence the AUC, is
+unchanged. With $\beta=1/T$, each term $-y\log\sigma(\beta z)-(1-y)\log(1-\sigma(\beta z))$ is
+convex in $\beta$: its second derivative is $z^2\sigma(\beta z)(1-\sigma(\beta z))\ge0$. An
+overconfident model has logits that are too large in absolute value, so the best $T$ is
+greater than $1$.
 
 \end{document}
